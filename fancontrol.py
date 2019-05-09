@@ -47,14 +47,17 @@ ON = "ON"
 OFF = "OFF"
 TOGGLE = "TOGGLE"
 RESET = "RESET"
+STATUS = "STATUS"
+EXIT = "EXIT"
 
 
 ###############################################################################
 # Script constants - Fan MQTT commands and maps
 ###############################################################################
-CMD_FAN_ON = ON
-CMD_FAN_OFF = OFF
-CMD_FAN_TOGGLE = TOGGLE
+CMD_FAN_ON = ON  # Topic payload for turning on the fan
+CMD_FAN_OFF = OFF  # Topic payload for turning off the fan
+CMD_FAN_TOGGLE = TOGGLE  # Topic payload for toggling the fan
+CMD_FAN_STATUS = STATUS  # Topic payload for invoking publishing fan status
 CMD_FAN_PERCON = "PERCON"  # Percentage of maximal temperature for fan on
 CMD_FAN_PERCOFF = "PERCOFF"  # Percentage of maximal temperature for fan off
 STATE_FAN_ON = ON
@@ -112,7 +115,7 @@ def action_fan(command, value=None):
         except Exception as errmsg:
             logger.error("Fan command %s failed: %s", command, errmsg)
         # Publishing action
-        mqtt_publish_fan_status()
+        mqtt_publish_fan_control()
     # Updating fan temperature percentage ON
     if command == CMD_FAN_PERCON:
         try:
@@ -120,6 +123,7 @@ def action_fan(command, value=None):
             setup_trigger_fan(fan_perc_on=value)
             logger.info("Updated fan percentage ON=%s%%", value)
             mqtt_publish_fan_percon()
+            mqtt_publish_fan_tempon()
         except Exception:
             logger.error("Fan command %s failed", command)
     # Updating fan temperature percentage OFF
@@ -129,6 +133,7 @@ def action_fan(command, value=None):
             setup_trigger_fan(fan_perc_off=value)
             logger.info("Updated fan percentage OFF=%s%%", value)
             mqtt_publish_fan_percoff()
+            mqtt_publish_fan_tempoff()
         except Exception:
             logger.error("Fan command %s failed", command)
     # Setting fan temperature percentages to default values
@@ -139,19 +144,12 @@ def action_fan(command, value=None):
         )
         logger.info("Reset fan limits to defaults")
         mqtt_publish_fan_limits()
-
-
-def action_script(command):
-    """Perform command for this script itself.
-
-    Arguments
-    ---------
-    command : str
-        Received command to be realized: ``{"EXIT"}``.
-
-    """
-    # Stop script
-    if command == "EXIT":
+    # Invoking publishing all status data
+    if command == STATUS:
+        logger.info("Publish all fan statuses")
+        mqtt_publish_fan_statuses()
+    # Cancelling the script
+    if command == EXIT:
         global script_run
         script_run = False
 
@@ -177,8 +175,8 @@ def mqtt_publish_temp():
             option, section, errmsg)
 
 
-def mqtt_publish_fan_status():
-    """Publish fan status to the MQTT status topic."""
+def mqtt_publish_fan_control():
+    """Publish fan control status to the MQTT status topic."""
     if not mqtt.get_connected():
         return
     cfg_option = "fan_status_control"
@@ -190,12 +188,12 @@ def mqtt_publish_fan_status():
     try:
         mqtt.publish(message, cfg_option, cfg_section)
         logger.debug(
-            "Published fan status %s to MQTT topic %s",
+            "Published fan control status %s to MQTT topic %s",
             message, mqtt.topic_name(cfg_option, cfg_section),
         )
     except Exception as errmsg:
         logger.error(
-            "Publishing fan status %s to MQTT topic %s failed: %s",
+            "Publishing fan controlstatus %s to MQTT topic %s failed: %s",
             message,
             mqtt.topic_name(cfg_option, cfg_section),
             errmsg,
@@ -238,10 +236,56 @@ def mqtt_publish_fan_percoff():
             errmsg)
 
 
+def mqtt_publish_fan_tempon():
+    """Publish fan temperature value ON to the MQTT status topic."""
+    if not mqtt.get_connected():
+        return
+    cfg_option = "fan_status_tempon"
+    cfg_section = mqtt.GROUP_TOPICS
+    try:
+        temperature = pi.convert_percentage_temperature(pi.FAN_PERC_ON_CUR)
+        mqtt.publish(str(temperature), cfg_option, cfg_section)
+        logger.debug(
+            "Published fan temperature ON=%s°C to MQTT topic %s",
+            temperature, mqtt.topic_name(cfg_option, cfg_section))
+    except Exception as errmsg:
+        logger.error(
+            "Publishing fan temperature ON=%s°C to MQTT topic %s failed: %s",
+            temperature, mqtt.topic_name(cfg_option, cfg_section),
+            errmsg)
+
+
+def mqtt_publish_fan_tempoff():
+    """Publish fan temperature value OFF to the MQTT status topic."""
+    if not mqtt.get_connected():
+        return
+    cfg_option = "fan_status_tempoff"
+    cfg_section = mqtt.GROUP_TOPICS
+    try:
+        temperature = pi.convert_percentage_temperature(pi.FAN_PERC_OFF_CUR)
+        mqtt.publish(str(temperature), cfg_option, cfg_section)
+        logger.debug(
+            "Published fan temperature OFF=%s°C to MQTT topic %s",
+            temperature, mqtt.topic_name(cfg_option, cfg_section))
+    except Exception as errmsg:
+        logger.error(
+            "Publishing fan temperature OFF=%s°C to MQTT topic %s failed: %s",
+            temperature, mqtt.topic_name(cfg_option, cfg_section),
+            errmsg)
+
+
 def mqtt_publish_fan_limits():
     """Publish fan temperature percentages to the MQTT status topic."""
     mqtt_publish_fan_percon()
     mqtt_publish_fan_percoff()
+    mqtt_publish_fan_tempon()
+    mqtt_publish_fan_tempoff()
+
+
+def mqtt_publish_fan_statuses():
+    """Publish all fan statuses to the corresponding MQTT status topics."""
+    mqtt_publish_fan_control()
+    mqtt_publish_fan_limits()
 
 
 def mqtt_message_log(message):
@@ -334,8 +378,7 @@ def cbMqtt_on_connect(client, userdata, flags, rc):
     if rc == 0:
         logger.debug("Connected to %s: %s", str(mqtt), userdata)
         setup_mqtt_filters()
-        mqtt_publish_fan_status()
-        mqtt_publish_fan_limits()
+        mqtt_publish_fan_statuses()
     else:
         logger.error("Connection to MQTT broker failed: %s (rc = %d)",
                      userdata, rc)
@@ -409,7 +452,7 @@ def cbMqtt_on_message(client, userdata, message):
 
 
 def cbMqtt_on_message_data(client, userdata, message):
-    """Process server data send through a MQTT topic(s).
+    """Process received data from MQTT topics.
 
     Arguments
     ---------
@@ -435,7 +478,7 @@ def cbMqtt_on_message_data(client, userdata, message):
 
 
 def cbMqtt_on_message_command(client, userdata, message):
-    """Process server command at receiving a message from the command topic(s).
+    """Process command at receiving a message from the command topic(s).
 
     Arguments
     ---------
@@ -454,15 +497,8 @@ def cbMqtt_on_message_command(client, userdata, message):
     """
     if not mqtt_message_log(message):
         return
-    # Command
     command = message.payload.decode("utf-8")
-    if message.topic == mqtt.topic_name("mqtt_topic_fan_command"):
-        logger.debug(
-            "Received general command %s from topic %s",
-            command, message.topic)
-        action_script(command)
-    # Fan control
-    elif message.topic == mqtt.topic_name("fan_command_control"):
+    if message.topic == mqtt.topic_name("fan_command_control"):
         logger.debug(
             "Received fan command %s from topic %s",
             command, message.topic)
@@ -728,10 +764,10 @@ def loop():
     try:
         logger.info("Script loop started")
         while (script_run):
-            time.sleep(1)
+            time.sleep(0.01)
         logger.warning("Script finished")
     except (KeyboardInterrupt, SystemExit):
-        logger.warning("Script cancelled")
+        logger.warning("Script cancelled from keyboard")
     finally:
         modTimer.stop_timers()
 

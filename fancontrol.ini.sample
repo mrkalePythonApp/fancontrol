@@ -5,7 +5,7 @@
 ; MQTT seed topics
 ; Each topic can be considered as a logical group of topics. With added
 ; trailing '/#' it can be used as a topic filter.
-mqtt_topic_fan = chalupa/server/fan
+mqtt_topic_fan = server/fan
 mqtt_topic_fan_data = %(mqtt_topic_fan)s/data
 mqtt_topic_fan_command = %(mqtt_topic_fan)s/cmd
 mqtt_topic_fan_status = %(mqtt_topic_fan)s/state
@@ -49,6 +49,8 @@ fan_command_percoff = %(mqtt_topic_fan_command)s/percoff
 fan_status_control = %(mqtt_topic_fan_status)s/control
 fan_status_percon = %(mqtt_topic_fan_status)s/percon
 fan_status_percoff = %(mqtt_topic_fan_status)s/percoff
+fan_status_tempon = %(mqtt_topic_fan_status)s/tempon
+fan_status_tempoff = %(mqtt_topic_fan_status)s/tempoff
 
 [Fan]
 ; Parameters of cooling fan control
