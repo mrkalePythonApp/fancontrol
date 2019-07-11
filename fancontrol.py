@@ -11,285 +11,103 @@ Script provides following functionalities:
 - Script publishes system temperature, configuration fata, and fan status
   to the ``local MQTT broker``.
 - Script can receive commands from `local MQTT broker` in order to change its
-  behaviour during running, e.g., turn on or off the fan, change fan trigger
-  temperatures, etc.
+  behaviour during running, e.g., turn on or off the fan, change fan
+  temperatures limits, etc.
 
 """
-__version__ = "0.1.0"
-__status__ = "Development"
-__author__ = "Libor Gabaj"
-__copyright__ = "Copyright 2019, " + __author__
+__version__ = '0.2.0'
+__status__ = 'Development'
+__author__ = 'Libor Gabaj'
+__copyright__ = 'Copyright 2019, ' + __author__
 __credits__ = [__author__]
-__license__ = "MIT"
+__license__ = 'MIT'
 __maintainer__ = __author__
-__email__ = "libor.gabaj@gmail.com"
+__email__ = 'libor.gabaj@gmail.com'
 
 # Standard library modules
 import time
 import os
-import os.path
 import sys
 import argparse
 import logging
+import platform
+
 # Third party modules
 import gbj_pythonlib_sw.config as modConfig
 import gbj_pythonlib_sw.mqtt as modMQTT
-import gbj_pythonlib_sw.statfilter as modFilter
 import gbj_pythonlib_sw.timer as modTimer
-import gbj_pythonlib_sw.trigger as modTrigger
 import gbj_pythonlib_hw.orangepi as modOrangePi
+import gbj_pythonlib_iot.common as iot
+import gbj_pythonlib_iot.system as iot_system
+import gbj_pythonlib_iot.fan as iot_fan
 
 
 ###############################################################################
-# Script constants - General states and MQTT commands
+# Enumeration and parameter classes
 ###############################################################################
-ON = "ON"
-OFF = "OFF"
-TOGGLE = "TOGGLE"
-RESET = "RESET"
-STATUS = "STATUS"
-EXIT = "EXIT"
+class Script:
+    """Script parameters."""
 
-
-###############################################################################
-# Script constants - Fan MQTT commands and maps
-###############################################################################
-CMD_FAN_ON = ON  # Topic payload for turning on the fan
-CMD_FAN_OFF = OFF  # Topic payload for turning off the fan
-CMD_FAN_TOGGLE = TOGGLE  # Topic payload for toggling the fan
-CMD_FAN_STATUS = STATUS  # Topic payload for invoking publishing fan status
-CMD_FAN_PERCON = "PERCON"  # Percentage of maximal temperature for fan on
-CMD_FAN_PERCOFF = "PERCOFF"  # Percentage of maximal temperature for fan off
-STATE_FAN_ON = ON
-STATE_FAN_OFF = OFF
+    (
+        fullname, basename, name,
+        running, service, lwt
+    ) = (
+            None, None, None,
+            True, False, 'lwt',
+        )
 
 
 ###############################################################################
 # Script global variables
 ###############################################################################
-script_run = True  # Flag about running script in a loop
 cmdline = None  # Object with command line arguments
 logger = None  # Object with standard logging
-trigger = None  # Object with triggers
-filter = None  # Object with statistical smoothing and filtering
 config = None  # Object with MQTT configuration file processing
 mqtt = None  # Object for MQTT broker manipulation
 pi = None  # Object with OrangePi GPIO control
+# Devices
+dev_system = None  # Object for processing system (microcomputer) parameters
+dev_fan = None  # Object for processing cooling fan parameters
 
 
 ###############################################################################
 # General actions
 ###############################################################################
-def action_fan(command, value=None):
-    """Perform command for the fan.
-
-    Arguments
-    ---------
-    command : str
-        Action name to be realized.
-    value
-        Any value that the action should be realized with.
-
-    """
-    # Controlling fan
-    if command in [CMD_FAN_ON, CMD_FAN_OFF, CMD_FAN_TOGGLE]:
-        # Suppress publishing useless command, i.e., the command changes pin
-        # state that it already has been.
-        try:
-            if command == CMD_FAN_TOGGLE:
-                if pi.is_pin_on(pi.PIN_FAN):
-                    command = CMD_FAN_OFF
-                else:
-                    command = CMD_FAN_ON
-            if command == CMD_FAN_ON:
-                if pi.is_pin_on(pi.PIN_FAN):
-                    return
-                pi.pin_on(pi.PIN_FAN)
-            elif command == CMD_FAN_OFF:
-                if pi.is_pin_off(pi.PIN_FAN):
-                    return
-                pi.pin_off(pi.PIN_FAN)
-            else:
-                return
-            logger.info("Fan set to %s", command)
-        except Exception as errmsg:
-            logger.error("Fan command %s failed: %s", command, errmsg)
-        # Publishing action
-        mqtt_publish_fan_control()
-    # Updating fan temperature percentage ON
-    if command == CMD_FAN_PERCON:
-        try:
-            value = abs(float(value))
-            setup_trigger_fan(fan_perc_on=value)
-            logger.info("Updated fan percentage ON=%s%%", value)
-            mqtt_publish_fan_percon()
-            mqtt_publish_fan_tempon()
-        except Exception:
-            logger.error("Fan command %s failed", command)
-    # Updating fan temperature percentage OFF
-    if command == CMD_FAN_PERCOFF:
-        try:
-            value = abs(float(value))
-            setup_trigger_fan(fan_perc_off=value)
-            logger.info("Updated fan percentage OFF=%s%%", value)
-            mqtt_publish_fan_percoff()
-            mqtt_publish_fan_tempoff()
-        except Exception:
-            logger.error("Fan command %s failed", command)
-    # Setting fan temperature percentages to default values
-    if command == RESET:
-        setup_trigger_fan(
-            fan_perc_on=pi.FAN_PERC_ON_DEF,
-            fan_perc_off=pi.FAN_PERC_OFF_DEF,
-        )
-        logger.info("Reset fan limits to defaults")
-        mqtt_publish_fan_limits()
-    # Invoking publishing all status data
-    if command == STATUS:
-        logger.info("Publish all fan statuses")
-        mqtt_publish_fan_statuses()
-    # Cancelling the script
-    if command == EXIT:
-        global script_run
-        script_run = False
+def action_exit():
+    """Perform all activities right before exiting the script."""
+    modTimer.stop_timers()
+    mqtt_publish_lwt(iot.Status.OFFLINE)
+    mqtt.disconnect()
 
 
 ###############################################################################
 # MQTT actions
 ###############################################################################
-def mqtt_publish_temp():
-    """Publish SoC temperature to a MQTT topic."""
+def mqtt_publish_lwt(status):
+    """Publish script status to the MQTT LWT topic."""
     if not mqtt.get_connected():
         return
-    message = filter.result()
-    option = "fan_data_temp"
-    section = mqtt.GROUP_TOPICS
-    try:
-        mqtt.publish(message, option, section)
-        logger.debug(
-            "Published temperature %s°C to MQTT topic %s",
-            filter.result(), mqtt.topic_name(option, section))
-    except Exception as errmsg:
-        logger.error(
-            "Temperature publishing to MQTT topic option %s:[%s] failed: %s",
-            option, section, errmsg)
-
-
-def mqtt_publish_fan_control():
-    """Publish fan control status to the MQTT status topic."""
-    if not mqtt.get_connected():
-        return
-    cfg_option = "fan_status_control"
+    cfg_option = Script.lwt
     cfg_section = mqtt.GROUP_TOPICS
-    if pi.is_pin_on(pi.PIN_FAN):
-        message = STATE_FAN_ON
-    else:
-        message = STATE_FAN_OFF
+    message = iot.get_status(status)
     try:
         mqtt.publish(message, cfg_option, cfg_section)
         logger.debug(
-            "Published fan control status %s to MQTT topic %s",
-            message, mqtt.topic_name(cfg_option, cfg_section),
+            'Published to LWT MQTT topic %s: %s',
+            mqtt.topic_name(cfg_option, cfg_section),
+            message
         )
     except Exception as errmsg:
         logger.error(
-            "Publishing fan controlstatus %s to MQTT topic %s failed: %s",
+            'Publishing %s to LWT MQTT topic %s failed: %s',
             message,
             mqtt.topic_name(cfg_option, cfg_section),
             errmsg,
         )
 
 
-def mqtt_publish_fan_percon():
-    """Publish fan temperature percentage ON to the MQTT status topic."""
-    if not mqtt.get_connected():
-        return
-    cfg_option = "fan_status_percon"
-    cfg_section = mqtt.GROUP_TOPICS
-    try:
-        mqtt.publish(str(pi.FAN_PERC_ON_CUR), cfg_option, cfg_section)
-        logger.debug(
-            "Published fan percentage ON=%s%% to MQTT topic %s",
-            pi.FAN_PERC_ON_CUR, mqtt.topic_name(cfg_option, cfg_section))
-    except Exception as errmsg:
-        logger.error(
-            "Publishing fan percentage ON=%s%% to MQTT topic %s failed: %s",
-            pi.FAN_PERC_ON_CUR, mqtt.topic_name(cfg_option, cfg_section),
-            errmsg)
-
-
-def mqtt_publish_fan_percoff():
-    """Publish fan temperature percentage OFF to the MQTT status topic."""
-    if not mqtt.get_connected():
-        return
-    cfg_option = "fan_status_percoff"
-    cfg_section = mqtt.GROUP_TOPICS
-    try:
-        mqtt.publish(str(pi.FAN_PERC_OFF_CUR), cfg_option, cfg_section)
-        logger.debug(
-            "Published fan percentage OFF=%s%% to MQTT topic %s",
-            pi.FAN_PERC_OFF_CUR, mqtt.topic_name(cfg_option, cfg_section))
-    except Exception as errmsg:
-        logger.error(
-            "Publishing fan percentage OFF=%s%% to MQTT topic %s failed: %s",
-            pi.FAN_PERC_OFF_CUR, mqtt.topic_name(cfg_option, cfg_section),
-            errmsg)
-
-
-def mqtt_publish_fan_tempon():
-    """Publish fan temperature value ON to the MQTT status topic."""
-    if not mqtt.get_connected():
-        return
-    cfg_option = "fan_status_tempon"
-    cfg_section = mqtt.GROUP_TOPICS
-    try:
-        temperature = pi.convert_percentage_temperature(pi.FAN_PERC_ON_CUR)
-        mqtt.publish(str(temperature), cfg_option, cfg_section)
-        logger.debug(
-            "Published fan temperature ON=%s°C to MQTT topic %s",
-            temperature, mqtt.topic_name(cfg_option, cfg_section))
-    except Exception as errmsg:
-        logger.error(
-            "Publishing fan temperature ON=%s°C to MQTT topic %s failed: %s",
-            temperature, mqtt.topic_name(cfg_option, cfg_section),
-            errmsg)
-
-
-def mqtt_publish_fan_tempoff():
-    """Publish fan temperature value OFF to the MQTT status topic."""
-    if not mqtt.get_connected():
-        return
-    cfg_option = "fan_status_tempoff"
-    cfg_section = mqtt.GROUP_TOPICS
-    try:
-        temperature = pi.convert_percentage_temperature(pi.FAN_PERC_OFF_CUR)
-        mqtt.publish(str(temperature), cfg_option, cfg_section)
-        logger.debug(
-            "Published fan temperature OFF=%s°C to MQTT topic %s",
-            temperature, mqtt.topic_name(cfg_option, cfg_section))
-    except Exception as errmsg:
-        logger.error(
-            "Publishing fan temperature OFF=%s°C to MQTT topic %s failed: %s",
-            temperature, mqtt.topic_name(cfg_option, cfg_section),
-            errmsg)
-
-
-def mqtt_publish_fan_limits():
-    """Publish fan temperature percentages to the MQTT status topic."""
-    mqtt_publish_fan_percon()
-    mqtt_publish_fan_percoff()
-    mqtt_publish_fan_tempon()
-    mqtt_publish_fan_tempoff()
-
-
-def mqtt_publish_fan_statuses():
-    """Publish all fan statuses to the corresponding MQTT status topics."""
-    mqtt_publish_fan_control()
-    mqtt_publish_fan_limits()
-
-
 def mqtt_message_log(message):
-    """Log receiving from a MQTT topic.
+    """Log receiving from an MQTT topic.
 
     Arguments
     ---------
@@ -307,52 +125,152 @@ def mqtt_message_log(message):
         Module for MQTT processing.
 
     """
-    logger.debug(
-        "Message from MQTT topic %s with qos %s and retain %s",
-        message.topic, message.qos, message.retain)
     if message.payload is None:
-        return False
-    logger.debug("%s: %s", sys._getframe(1).f_code.co_name,
-                 message.payload.decode("utf-8"))
-    return True
+        payload = "None"
+    else:
+        payload = message.payload.decode('utf-8')
+    logger.debug(
+        '%s -- MQTT topic %s, QoS=%s, retain=%s: %s',
+        sys._getframe(1).f_code.co_name,
+        message.topic, message.qos, bool(message.retain), payload,
+    )
+    return message.payload is not None
+
+
+def mqtt_publish_fan_percon():
+    """Publish fan temperature percentage ON to the MQTT status topic."""
+    if not mqtt.get_connected():
+        return
+    cfg_option = 'fan_status_percon'
+    cfg_section = mqtt.GROUP_TOPICS
+    value = dev_fan.get_percentage_on()
+    try:
+        mqtt.publish(str(value), cfg_option, cfg_section)
+        logger.debug(
+            'Published fan percentage ON=%s%% to MQTT topic %s',
+            value, mqtt.topic_name(cfg_option, cfg_section))
+    except Exception as errmsg:
+        logger.error(
+            'Publishing fan percentage ON=%s%% to MQTT topic %s failed: %s',
+            value, mqtt.topic_name(cfg_option, cfg_section), errmsg)
+
+
+def mqtt_publish_fan_percoff():
+    """Publish fan temperature percentage OFF to the MQTT status topic."""
+    if not mqtt.get_connected():
+        return
+    cfg_option = 'fan_status_percoff'
+    cfg_section = mqtt.GROUP_TOPICS
+    value = dev_fan.get_percentage_off()
+    try:
+        mqtt.publish(str(value), cfg_option, cfg_section)
+        logger.debug(
+            'Published fan percentage OFF=%s%% to MQTT topic %s',
+            value, mqtt.topic_name(cfg_option, cfg_section))
+    except Exception as errmsg:
+        logger.error(
+            'Publishing fan percentage OFF=%s%% to MQTT topic %s failed: %s',
+            value, mqtt.topic_name(cfg_option, cfg_section), errmsg)
+
+
+def mqtt_publish_fan_tempon():
+    """Publish fan temperature value ON to the MQTT status topic."""
+    if not mqtt.get_connected():
+        return
+    cfg_option = 'fan_status_tempon'
+    cfg_section = mqtt.GROUP_TOPICS
+    value = dev_fan.get_temperature_on()
+    try:
+        mqtt.publish(str(value), cfg_option, cfg_section)
+        logger.debug(
+            'Published fan temperature ON=%s°C to MQTT topic %s',
+            value, mqtt.topic_name(cfg_option, cfg_section))
+    except Exception as errmsg:
+        logger.error(
+            'Publishing fan temperature ON=%s°C to MQTT topic %s failed: %s',
+            value, mqtt.topic_name(cfg_option, cfg_section), errmsg)
+
+
+def mqtt_publish_fan_tempoff():
+    """Publish fan temperature value OFF to the MQTT status topic."""
+    if not mqtt.get_connected():
+        return
+    cfg_option = 'fan_status_tempoff'
+    cfg_section = mqtt.GROUP_TOPICS
+    value = dev_fan.get_temperature_on()
+    try:
+        mqtt.publish(str(value), cfg_option, cfg_section)
+        logger.debug(
+            'Published fan temperature OFF=%s°C to MQTT topic %s',
+            value, mqtt.topic_name(cfg_option, cfg_section))
+    except Exception as errmsg:
+        logger.error(
+            'Publishing fan temperature OFF=%s°C to MQTT topic %s failed: %s',
+            value, mqtt.topic_name(cfg_option, cfg_section), errmsg)
+
+
+def mqtt_publish_fan_status():
+    """Publish fan status to the MQTT status topic."""
+    if not mqtt.get_connected():
+        return
+    cfg_option = 'mqtt_topic_fan_status'
+    cfg_section = mqtt.GROUP_DEFAULT
+    if pi.is_pin_on(dev_fan.get_pin()):
+        message = iot.get_status(iot.Status.ACTIVE)
+    else:
+        message = iot.get_status(iot.Status.IDLE)
+    try:
+        mqtt.publish(message, cfg_option, cfg_section)
+        logger.debug(
+            'Published fan status %s to MQTT topic %s',
+            message, mqtt.topic_name(cfg_option, cfg_section),
+        )
+    except Exception as errmsg:
+        logger.error(
+            'Publishing fan status %s to MQTT topic %s failed: %s',
+            message,
+            mqtt.topic_name(cfg_option, cfg_section),
+            errmsg,
+        )
+
+
+def mqtt_publish_fan_state():
+    """Publish fan status and all parameters to the MQTT topics."""
+    mqtt_publish_fan_status()
+    mqtt_publish_fan_percon()
+    mqtt_publish_fan_percoff()
+    mqtt_publish_fan_tempon()
+    mqtt_publish_fan_tempoff()
 
 
 ###############################################################################
 # Callback functions
 ###############################################################################
-def cbTimer_temp_measure(*arg, **kwargs):
-    """Measure current CPU temperature."""
-    exec_last = kwargs.pop("exec_last", False)
-    logger.debug(
-        "Measured temperature %s°C",
-        filter.result(pi.measure_temperature())
-    )
-    if exec_last:
-        # global script_run
-        # script_run = False
-        pass
-
-
-def cbTimer_temp_publish(*arg, **kwargs):
-    """Publish current CPU temperature."""
-    logger.debug(
-        "Published temperature %s°C",
-        filter.result()
-    )
-    mqtt_publish_temp()
-
-
-def cbTimer_temp_triggers(*arg, **kwargs):
-    """Execute CPU temperature triggers."""
-    trigger.exec_triggers(filter.result(), ids=["fanon", "fanoff"])
-
-
-def cbTrigger_fan(*args, **kwargs):
-    """Execute command for the fan."""
-    command = kwargs.pop("cmd", None)
-    if command is None:
+def cbTimer_mqtt_reconnect(*arg, **kwargs):
+    """Execute MQTT reconnect."""
+    if mqtt.get_connected():
         return
-    action_fan(command)
+    logger.warning('Reconnecting to MQTT broker')
+    try:
+        mqtt.reconnect()
+    except Exception as errmsg:
+        logger.error(
+            'Reconnection to MQTT broker failed with error: %s',
+            errmsg)
+
+
+def cbTimer_fan(*arg, **kwargs):
+    """Check SoC temperature and control fan accordingly."""
+    fan_pin = dev_fan.get_pin()
+    temp_cur = dev_system.get_temperature()
+    temp_on = dev_fan.get_temperature_on()
+    temp_off = dev_fan.get_temperature_off()
+    # Turn on fan at reaching start temperature and fan is switched off
+    if temp_cur >= temp_on and pi.is_pin_off(fan_pin):
+        pi.pin_on(fan_pin)
+    # Turn off fan at reaching stop temperature and fan is switched on
+    if temp_cur <= temp_off and pi.is_pin_on(fan_pin):
+        pi.pin_off(fan_pin)
 
 
 def cbMqtt_on_connect(client, userdata, flags, rc):
@@ -376,11 +294,11 @@ def cbMqtt_on_connect(client, userdata, flags, rc):
 
     """
     if rc == 0:
-        logger.debug("Connected to %s: %s", str(mqtt), userdata)
+        logger.debug('Connected to %s: %s', str(mqtt), userdata)
         setup_mqtt_filters()
-        mqtt_publish_fan_statuses()
+        mqtt_publish_fan_state()
     else:
-        logger.error("Connection to MQTT broker failed: %s (rc = %d)",
+        logger.error('Connection to MQTT broker failed: %s (rc = %d)',
                      userdata, rc)
 
 
@@ -402,7 +320,7 @@ def cbMqtt_on_disconnect(client, userdata, rc):
         Description of callback arguments for proper utilizing.
 
     """
-    logger.warning("Disconnected from %s: %s (rc = %d)",
+    logger.warning('Disconnected from %s: %s (rc = %d)',
                    str(mqtt), userdata, rc)
 
 
@@ -422,7 +340,7 @@ def cbMqtt_on_subscribe(client, userdata, mid, granted_qos):
         for each of the different subscription requests.
 
     """
-    # logger.debug("Subscribed to MQTT topic with message id %d", mid)
+    # logger.debug('Subscribed to MQTT topic with message id %d', mid)
     pass
 
 
@@ -451,33 +369,7 @@ def cbMqtt_on_message(client, userdata, message):
         return
 
 
-def cbMqtt_on_message_data(client, userdata, message):
-    """Process received data from MQTT topics.
-
-    Arguments
-    ---------
-    client : object
-        MQTT client instance for this callback.
-    userdata
-        The private user data.
-    message : MQTTMessage object
-        The object with members `topic`, `payload`, `qos`, `retain`.
-
-    """
-    if not mqtt_message_log(message):
-        return
-    # CPU Temperature
-    if message.topic == mqtt.topic_name("fan_data_temp"):
-        value = float(message.payload)
-        logger.debug("Received temperature %s°C", value)
-    # Unexpected data
-    else:
-        logger.warning(
-            "Received unknown data %s from topic %s",
-            message.payload.decode("utf-8"), message.topic)
-
-
-def cbMqtt_on_message_command(client, userdata, message):
+def cbMqtt_dev_fan(client, userdata, message):
     """Process command at receiving a message from the command topic(s).
 
     Arguments
@@ -497,25 +389,58 @@ def cbMqtt_on_message_command(client, userdata, message):
     """
     if not mqtt_message_log(message):
         return
-    command = message.payload.decode("utf-8")
-    if message.topic == mqtt.topic_name("fan_command_control"):
-        logger.debug(
-            "Received fan command %s from topic %s",
-            command, message.topic)
-        action_fan(command)
-    elif message.topic in [mqtt.topic_name("fan_command_percon"),
-                           mqtt.topic_name("fan_command_percoff"),
-                           ]:
-        command = message.topic.split("/").pop().upper()
-        logger.debug(
-            "Received fan command %s with value %s from topic %s",
-            command, message.payload.decode("utf-8"), message.topic)
-        action_fan(command, message.payload.decode("utf-8"))
-    # Unexpected data
+    command = iot.get_command_index(message.payload.decode('utf-8'))
+    try:
+        value = float(message.payload)
+    except ValueError:
+        value = None
+    if message.topic == mqtt.topic_name('mqtt_topic_fan_command',
+                                        mqtt.GROUP_DEFAULT):
+        fan_pin = dev_fan.get_pin()
+        if command == iot.Command.ON and pi.is_pin_off(fan_pin):
+            pi.pin_on(fan_pin)
+            mqtt_publish_fan_status()
+        elif command == iot.Command.OFF and pi.is_pin_on(fan_pin):
+            pi.pin_off(fan_pin)
+            mqtt_publish_fan_status()
+        elif command == iot.Command.TOGGLE:
+            if pi.is_pin_on(fan_pin):
+                pi.pin_off(fan_pin)
+            else:
+                pi.pin_on(fan_pin)
+            mqtt_publish_fan_status()
+        elif command == iot.Command.STATUS:
+            mqtt_publish_fan_state()
+        elif command == iot.Command.RESET:
+            dev_fan.reset()
+            mqtt_publish_fan_state()
+    elif message.topic == mqtt.topic_name('fan_command_percon'):
+        if value is not None:
+            dev_fan.set_percentage_on(value)
+            mqtt_publish_fan_percon()
+            logger.info('Updated fan percentage ON=%s%%', value)
+    elif message.topic == mqtt.topic_name('fan_command_percoff'):
+        if value is not None:
+            dev_fan.set_percentage_off(value)
+            mqtt_publish_fan_percoff()
+            logger.info('Updated fan percentage OFF=%s%%', value)
+    elif message.topic == mqtt.topic_name('fan_command_tempon'):
+        if value is not None:
+            dev_fan.set_temperature_on(value)
+            mqtt_publish_fan_tempon()
+            logger.info('Updated fan temperature ON=%s°C', value)
+    elif message.topic == mqtt.topic_name('fan_command_tempoff'):
+        if value is not None:
+            dev_fan.set_temperature_off(value)
+            mqtt_publish_fan_tempoff()
+            logger.info('Updated fan temperature OFF=%s°C', value)
+    # Unexpected command
     else:
-        logger.warning(
-            "Received unknown command %s from topic %s",
-            message.payload.decode("utf-8"), message.topic)
+        logger.debug(
+            'Unexpected topic "%s" with value: "%s"',
+            message.topic,
+            message.payload
+        )
 
 
 ###############################################################################
@@ -523,48 +448,53 @@ def cbMqtt_on_message_command(client, userdata, message):
 ###############################################################################
 def setup_cmdline():
     """Define command line arguments."""
-    config_file = os.path.splitext(os.path.abspath(__file__))[0] + ".ini"
-    log_folder = "/var/log"
+    config_file = os.path.splitext(os.path.abspath(__file__))[0] + '.ini'
+    if platform.system() == 'Linux':
+        log_folder = '/var/log'
+    elif platform.system() == 'Windows':
+        log_folder = 'c:/Temp'
+    else:
+        log_folder = '.'
 
     parser = argparse.ArgumentParser(
-        description="Cooling fan manager and MQTT client, version "
+        description='Cooling fan manager and MQTT client, version '
         + __version__
     )
     # Position arguments
     parser.add_argument(
-        "config",
-        type=argparse.FileType("r"),
-        nargs="?",
+        'config',
+        type=argparse.FileType('r'),
+        nargs='?',
         default=config_file,
-        help="Configuration INI file, default: " + config_file
+        help='Configuration INI file, default: ' + config_file
     )
     # Options
     parser.add_argument(
-        "-V", "--version",
-        action="version",
+        '-V', '--version',
+        action='version',
         version=__version__,
-        help="Current version of the script."
+        help='Current version of the script.'
     )
     parser.add_argument(
-        "-v", "--verbose",
-        choices=["debug", "warning", "info", "error", "critical"],
-        default="warning",
-        help="Level of logging to the console."
+        '-v', '--verbose',
+        choices=['debug', 'warning', 'info', 'error', 'critical'],
+        default='warning',
+        help='Level of logging to the console.'
     )
     parser.add_argument(
-        "-l", "--loglevel",
-        choices=["debug", "warning", "info", "error", "critical"],
-        default="debug",
-        help="Level of logging to a log file."
+        '-l', '--loglevel',
+        choices=['debug', 'warning', 'info', 'error', 'critical'],
+        default='debug',
+        help='Level of logging to a log file.'
     )
     parser.add_argument(
-        "-d", "--logdir",
+        '-d', '--logdir',
         default=log_folder,
-        help="Folder of a log file, default " + log_folder
+        help='Folder of a log file, default ' + log_folder
     )
     parser.add_argument(
-        "-c", "--configuration",
-        action="store_true",
+        '-c', '--configuration',
+        action='store_true',
         help="""Print configuration parameters in form of INI file content."""
     )
     # Process command line arguments
@@ -576,23 +506,23 @@ def setup_logger():
     """Configure logging facility."""
     global logger
     # Set logging to file for module and script logging
-    log_file = "/".join([cmdline.logdir, os.path.basename(__file__) + ".log"])
+    log_file = '/'.join([cmdline.logdir, os.path.basename(__file__) + '.log'])
     logging.basicConfig(
         level=getattr(logging, cmdline.loglevel.upper()),
-        format="%(asctime)s - %(levelname)-8s - %(name)s: %(message)s",
+        format='%(asctime)s - %(levelname)-8s - %(name)s: %(message)s',
         filename=log_file,
-        filemode="w"
+        filemode='w'
     )
     # Set console logging
     formatter = logging.Formatter(
-        "%(levelname)-8s - %(name)-20s: %(message)s")
+        '%(levelname)-8s - %(name)-20s: %(message)s')
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(getattr(logging, cmdline.verbose.upper()))
     console_handler.setFormatter(formatter)
-    logger = logging.getLogger("{} {}".format(
+    logger = logging.getLogger('{} {}'.format(
         os.path.basename(__file__), __version__))
     logger.addHandler(console_handler)
-    logger.warning("Script started from file %s", os.path.abspath(__file__))
+    logger.warning('Script started from file %s', os.path.abspath(__file__))
 
 
 def setup_config():
@@ -612,34 +542,46 @@ def setup_pi():
     """
     global pi
     pi = modOrangePi.OrangePiOne()
-    pi.PIN_FAN = config.option("pin_fan_name", "Fan")
-    # pi.PIN_LED = config.option("pin_led_name", "Fan")
-    # Temperature percentage for fan ON
-    pi.FAN_PERC_ON_DEF = abs(float(config.option(
-        "percentage_maxtemp_on", "Fan", 85.0)))
-    pi.FAN_PERC_ON_MIN = 80.0
-    pi.FAN_PERC_ON_MAX = 95.0
-    pi.FAN_PERC_ON_CUR = pi.FAN_PERC_ON_DEF
-    # Temperature percentage for fan OFF
-    pi.FAN_PERC_OFF_DEF = abs(float(config.option(
-        "percentage_maxtemp_off", "Fan", 75.0)))
-    pi.FAN_PERC_OFF_MIN = 60.0
-    pi.FAN_PERC_OFF_MAX = 75.0
-    pi.FAN_PERC_OFF_CUR = pi.FAN_PERC_OFF_DEF
+
+
+def setup_system():
+    """Define microcomputer control."""
+    global dev_system
+    dev_system = iot_system.System()
+
+
+def setup_fan():
+    """Define cooling fan control."""
+    global dev_fan
+    dev_fan = iot_fan.Fan(config.option('pin_fan_name', 'Fan'))
+    dev_fan.set_percentage_on(float(config.option(
+        'percentage_on', 'Fan', None)))
+    dev_fan.set_percentage_off(float(config.option(
+        'percentage_off', 'Fan', None)))
 
 
 def setup_mqtt():
     """Define MQTT management."""
     global mqtt
-    mqtt = modMQTT.MqttBroker(config)
-    mqtt.connect(
-        username=config.option("username", mqtt.GROUP_BROKER),
-        password=config.option("password", mqtt.GROUP_BROKER),
+    mqtt = modMQTT.MqttBroker(
+        config,
         connect=cbMqtt_on_connect,
         disconnect=cbMqtt_on_disconnect,
         subscribe=cbMqtt_on_subscribe,
         message=cbMqtt_on_message,
     )
+    # Last will and testament
+    status = iot.get_status(iot.Status.OFFLINE)
+    mqtt.lwt(status, Script.lwt, mqtt.GROUP_TOPICS)
+    try:
+        mqtt.connect(
+            username=config.option('username', mqtt.GROUP_BROKER),
+            password=config.option('password', mqtt.GROUP_BROKER),
+        )
+    except Exception as errmsg:
+        logger.error(
+            'Connection to MQTT broker failed with error: %s',
+            errmsg)
 
 
 def setup_mqtt_filters():
@@ -652,103 +594,45 @@ def setup_mqtt_filters():
 
     """
     mqtt.callback_filters(
-        fan_filter_data=cbMqtt_on_message_data,
-        fan_filter_command=cbMqtt_on_message_command,
+        filter_fan=cbMqtt_dev_fan,
     )
     try:
         mqtt.subscribe_filters()
     except Exception as errcode:
         logger.error(
-            "MQTT subscribtion to topic filters failed with error code %s",
+            'MQTT subscribtion to topic filters failed with error code %s',
             errcode)
-
-
-def setup_filter():
-    """Define statistical smoothing and filtering."""
-    global filter
-    filter = modFilter.StatFilterExponential(
-        decimals=3,
-        factor=0.2
-    )
-
-
-def setup_trigger():
-    """Define triggers for evaluating value limits."""
-    global trigger
-    trigger = modTrigger.Trigger()
-    setup_trigger_fan()
-
-
-def setup_trigger_fan(fan_perc_on=None, fan_perc_off=None):
-    """Define triggers for controlling fan by SoC temperature.
-
-    Arguments
-    ---------
-    fan_perc_on : float
-        Percentage of maximal temperature for turning fan on.
-    fan_perc_off : float
-        Percentage of maximal temperature for turning fan off.
-
-    """
-    # Sanitize parameters
-    pi.FAN_PERC_ON_CUR = max(min(float(fan_perc_on or pi.FAN_PERC_ON_CUR),
-                                 pi.FAN_PERC_ON_MAX),
-                             pi.FAN_PERC_ON_MIN)
-    pi.FAN_PERC_OFF_CUR = max(min(float(fan_perc_off or pi.FAN_PERC_OFF_CUR),
-                                  pi.FAN_PERC_OFF_MAX),
-                              pi.FAN_PERC_OFF_MIN)
-    if pi.FAN_PERC_OFF_CUR > pi.FAN_PERC_ON_CUR:
-        pi.FAN_PERC_OFF_CUR, pi.FAN_PERC_ON_CUR \
-            = pi.FAN_PERC_ON_CUR, pi.FAN_PERC_OFF_CUR
-    # Set triggers
-    logger.debug(
-        "Setup fan triggers: %s = %s%%, %s = %s%%",
-        ON, pi.FAN_PERC_ON_CUR,
-        OFF, pi.FAN_PERC_OFF_CUR)
-    trigger.set_trigger(
-        id="fanon",
-        mode=modTrigger.UPPER,
-        value=pi.convert_percentage_temperature(pi.FAN_PERC_ON_CUR),
-        callback=cbTrigger_fan,
-        cmd=CMD_FAN_ON,     # Arguments to callback
-    )
-    trigger.set_trigger(
-        id="fanoff",
-        mode=modTrigger.LOWER,
-        value=pi.convert_percentage_temperature(pi.FAN_PERC_OFF_CUR),
-        callback=cbTrigger_fan,
-        cmd=CMD_FAN_OFF,     # Arguments to callback
-    )
 
 
 def setup_timers():
     """Define dictionary of timers."""
     # Timer 01
-    name = "Timer_temp"
-    cfg_section = "TimerTemperature"
-    # Measurement period
-    c_period = float(config.option("period_measure", cfg_section, 5.0))
-    c_period = max(min(c_period, 60.0), 1.0)
-    # Publishing prescale
-    c_publish = int(config.option("prescale_publish", cfg_section, 3))
-    c_publish = max(min(c_publish, 10), 1)
-    # Trigger evaluation prescale
-    c_triggers = int(config.option("prescale_triggers", cfg_section, 6))
-    c_triggers = max(min(c_triggers, 1000), 1)
-    logger.debug(
-        "Setup timer %s: period = %ss, publish = %sx, triggers = %sx",
-        name, c_period, c_publish, c_triggers)
-    # Definition
+    name = 'Timer_mqtt'
+    cfg_section = 'TimerMqtt'
+    c_period = float(config.option('period_reconnect', cfg_section, 15.0))
+    c_period = max(min(c_period, 180.0), 5.0)
+    logger.debug('Setup reconnection timer %s: period = %ss', name, c_period)
     timer1 = modTimer.Timer(
         c_period,
-        cbTimer_temp_measure,
+        cbTimer_mqtt_reconnect,
+        name=name,
+        id=name,
+    )
+    # Timer 02
+    name = 'Timer_fan'
+    cfg_section = 'Fan'
+    c_period = float(config.option('period_check', cfg_section, 5.0))
+    c_period = max(min(c_period, 60.0), 1.0)
+    logger.debug('Setup checking timer %s: period = %ss', name, c_period)
+    timer2 = modTimer.Timer(
+        c_period,
+        cbTimer_fan,
         name=name,
         # count=9,
     )
-    timer1.prescaler(c_publish, cbTimer_temp_publish)
-    timer1.prescaler(c_triggers, cbTimer_temp_triggers)
+    # Register and start all timers
     modTimer.register_timer(name, timer1)
-    # Start all timers
+    modTimer.register_timer(name, timer2)
     modTimer.start_timers()
 
 
@@ -757,19 +641,24 @@ def setup():
     # Print configuration file to the console
     if cmdline.configuration:
         print(config.get_content())
+    # Running mode
+    if Script.service:
+        logger.info('Script runs as the service %s.service', Script.name)
+    else:
+        logger.info('Script %s runs in standalone mode', Script.name)
 
 
 def loop():
     """Wait for keyboard or system exit."""
     try:
-        logger.info("Script loop started")
-        while (script_run):
+        logger.info('Script loop started')
+        while (Script.running):
             time.sleep(0.01)
-        logger.warning("Script finished")
+        logger.warning('Script finished')
     except (KeyboardInterrupt, SystemExit):
-        logger.warning("Script cancelled from keyboard")
+        logger.warning('Script cancelled from keyboard')
     finally:
-        modTimer.stop_timers()
+        action_exit()
 
 
 def main():
@@ -778,15 +667,15 @@ def main():
     setup_logger()
     setup_config()
     setup_pi()
+    setup_system()
+    setup_fan()
     setup_mqtt()
-    setup_filter()
-    setup_trigger()
     setup_timers()
     setup()
     loop()
 
 
-if __name__ == "__main__":
-    if os.getegid() != 0:
+if __name__ == '__main__':
+    if platform.system() == 'Linux' and os.getegid() != 0:
         sys.exit('Script must be run as root')
     main()

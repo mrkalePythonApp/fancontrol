@@ -1,14 +1,14 @@
-; This is a sample configuration file.
 ; All the values enclosed in sharp parentheses, mostly credentials, should be
 ; replaced with your real data.
 [DEFAULT]
 ; MQTT seed topics
 ; Each topic can be considered as a logical group of topics. With added
 ; trailing '/#' it can be used as a topic filter.
-mqtt_topic_fan = server/fan
-mqtt_topic_fan_data = %(mqtt_topic_fan)s/data
-mqtt_topic_fan_command = %(mqtt_topic_fan)s/cmd
+mqtt_topic_server = server
+;
+mqtt_topic_fan = %(mqtt_topic_server)s/fan
 mqtt_topic_fan_status = %(mqtt_topic_fan)s/state
+mqtt_topic_fan_command = %(mqtt_topic_fan)s/cmd
 
 [MQTTbroker]
 ; Hardcoded default - the hostname
@@ -32,9 +32,7 @@ password = <mqtt_password>
 ; Examples:
 ; fan_dummy = %(mqtt_topic_fan)s/dummy/#, 1
 ; fan_dummy = %(mqtt_topic_fan)s/dummy/+/something/#, 2
-fan_filter_data = %(mqtt_topic_fan_data)s/#
-fan_filter_status = %(mqtt_topic_fan_status)s/#
-fan_filter_command = %(mqtt_topic_fan_command)s/#
+filter_fan =  %(mqtt_topic_fan_command)s/#
 
 [MQTTtopics]
 ; Theese single topics are utilized for publishing and in callbacks
@@ -42,41 +40,39 @@ fan_filter_command = %(mqtt_topic_fan_command)s/#
 ; topic = topicName, topicQos
 ; Example:
 ; fan_dummy = %(mqtt_topic_fan)s/dummy, 1
-fan_data_temp = %(mqtt_topic_fan_data)s/temp
-fan_command_control = %(mqtt_topic_fan_command)s/control
-fan_command_percon = %(mqtt_topic_fan_command)s/percon
-fan_command_percoff = %(mqtt_topic_fan_command)s/percoff
-fan_status_control = %(mqtt_topic_fan_status)s/control
-fan_status_percon = %(mqtt_topic_fan_status)s/percon
-fan_status_percoff = %(mqtt_topic_fan_status)s/percoff
-fan_status_tempon = %(mqtt_topic_fan_status)s/tempon
-fan_status_tempoff = %(mqtt_topic_fan_status)s/tempoff
+lwt = %(mqtt_topic_fan_status)s, 0, 1
+; Topics for cooling fan
+fan_status_percon = %(mqtt_topic_fan_status)s/perc/on
+fan_status_percoff = %(mqtt_topic_fan_status)s/perc/off
+fan_status_tempon = %(mqtt_topic_fan_status)s/temp/on
+fan_status_tempoff = %(mqtt_topic_fan_status)s/temp/off
+fan_command_percon = %(mqtt_topic_fan_command)s/perc/on
+fan_command_percoff = %(mqtt_topic_fan_command)s/perc/off
+fan_command_tempon = %(mqtt_topic_fan_command)s/temp/on
+fan_command_tempoff = %(mqtt_topic_fan_command)s/temp/off
+
+[TimerMqtt]
+; Period in seconds for testing connection and attempting to reconnect
+; to a MQTT broker.
+; Hardcoded default 15.0s, hardcoded valid range 5 ~ 180s
+period_reconnect = 30.0
 
 [Fan]
 ; Parameters of cooling fan control
 ; Control pin pyA20 port or connector name
-pin_fan_name = PA13
-; LED pyA20 port or connector name signalLing running fan
+pin_name = PA13
+; LED pyA20 port or connector name signaling running fan
 ; [STATUS_LED, POWER_LED] - not used currently
 ; pin_led_name = POWER_LED ; Green LED
 ; pin_led_name = STATUS_LED ; Red LED
 ; Percentage of maximal temperature for turning fan on
-; Hardcoded default 85%, valid range 80.0 ~ 95.0% limited in code
-percentage_maxtemp_on = 95
+; Hardcoded default 90%, valid range 80.0 ~ 95.0% limited in code
+percentage_on = 93
 ; Percentage of maximal temperature for turning fan off.
-; Hardcoded default 75%, valid range 60.0 ~ 75.0% limited in code
+; Hardcoded default 60%, valid range 50.0 ~ 75.0% limited in code
 ; Should be sufficiently lower then turning on percentage in order to achieve
 ; proper hysteresis.
-percentage_maxtemp_off = 66
-
-[TimerTemperature]
-; Period in seconds for measuring SoC temperature
+percentage_off = 66
+; Period in seconds for checking SoC temperature and controlling fan accordingly
 ; Hardcoded default 5.0s, hardcoded valid range 1 ~ 60s
-period_measure = 2.0
-; Prescale (multiplier of periods) for publish SoC temperature to MQTT
-; Hardcoded default 3, hardcoded valid range 1 ~ 10
-prescale_publish = 3
-; Prescale (multiplier of periods) for executing triggers related to
-; SoC temperature.
-; Hardcoded default 6, hardcoded valid range 1 ~ 1000
-prescale_triggers = 5
+period_check = 5.0
