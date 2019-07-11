@@ -38,7 +38,6 @@ import gbj_pythonlib_sw.mqtt as modMQTT
 import gbj_pythonlib_sw.timer as modTimer
 import gbj_pythonlib_hw.orangepi as modOrangePi
 import gbj_pythonlib_iot.common as iot
-import gbj_pythonlib_iot.system as iot_system
 import gbj_pythonlib_iot.fan as iot_fan
 
 
@@ -65,8 +64,6 @@ logger = None  # Object with standard logging
 config = None  # Object with MQTT configuration file processing
 mqtt = None  # Object for MQTT broker manipulation
 pi = None  # Object with OrangePi GPIO control
-# Devices
-dev_system = None  # Object for processing system (microcomputer) parameters
 dev_fan = None  # Object for processing cooling fan parameters
 
 
@@ -262,7 +259,7 @@ def cbTimer_mqtt_reconnect(*arg, **kwargs):
 def cbTimer_fan(*arg, **kwargs):
     """Check SoC temperature and control fan accordingly."""
     fan_pin = dev_fan.get_pin()
-    temp_cur = dev_system.get_temperature()
+    temp_cur = dev_fan.get_temperature()
     temp_on = dev_fan.get_temperature_on()
     temp_off = dev_fan.get_temperature_off()
     # Turn on fan at reaching start temperature and fan is switched off
@@ -477,13 +474,13 @@ def setup_cmdline():
     )
     parser.add_argument(
         '-v', '--verbose',
-        choices=['debug', 'warning', 'info', 'error', 'critical'],
-        default='warning',
+        choices=['debug', 'info', 'warning', 'error', 'critical'],
+        default='debug',
         help='Level of logging to the console.'
     )
     parser.add_argument(
         '-l', '--loglevel',
-        choices=['debug', 'warning', 'info', 'error', 'critical'],
+        choices=['debug', 'info', 'warning', 'error', 'critical'],
         default='debug',
         help='Level of logging to a log file.'
     )
@@ -542,12 +539,6 @@ def setup_pi():
     """
     global pi
     pi = modOrangePi.OrangePiOne()
-
-
-def setup_system():
-    """Define microcomputer control."""
-    global dev_system
-    dev_system = iot_system.System()
 
 
 def setup_fan():
@@ -667,7 +658,6 @@ def main():
     setup_logger()
     setup_config()
     setup_pi()
-    setup_system()
     setup_fan()
     setup_mqtt()
     setup_timers()
