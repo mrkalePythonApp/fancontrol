@@ -77,32 +77,6 @@ def action_exit():
     mqtt.disconnect()
 
 
-###############################################################################
-# MQTT actions
-###############################################################################
-def mqtt_publish_lwt(status):
-    """Publish script status to the MQTT LWT topic."""
-    if not mqtt.get_connected():
-        return
-    cfg_option = Script.lwt
-    cfg_section = mqtt.GROUP_TOPICS
-    message = iot.get_status(status)
-    try:
-        mqtt.publish(message, cfg_option, cfg_section)
-        logger.debug(
-            'Published to LWT MQTT topic %s: %s',
-            mqtt.topic_name(cfg_option, cfg_section),
-            message
-        )
-    except Exception as errmsg:
-        logger.error(
-            'Publishing %s to LWT MQTT topic %s failed: %s',
-            message,
-            mqtt.topic_name(cfg_option, cfg_section),
-            errmsg,
-        )
-
-
 def mqtt_message_log(message):
     """Log receiving from an MQTT topic.
 
@@ -132,6 +106,32 @@ def mqtt_message_log(message):
         message.topic, message.qos, bool(message.retain), payload,
     )
     return message.payload is not None
+
+
+###############################################################################
+# MQTT actions
+###############################################################################
+def mqtt_publish_lwt(status):
+    """Publish script status to the MQTT LWT topic."""
+    if not mqtt.get_connected():
+        return
+    cfg_option = Script.lwt
+    cfg_section = mqtt.GROUP_TOPICS
+    message = iot.get_status(status)
+    try:
+        mqtt.publish(message, cfg_option, cfg_section)
+        logger.debug(
+            'Published to LWT MQTT topic %s: %s',
+            mqtt.topic_name(cfg_option, cfg_section),
+            message
+        )
+    except Exception as errmsg:
+        logger.error(
+            'Publishing %s to LWT MQTT topic %s failed: %s',
+            message,
+            mqtt.topic_name(cfg_option, cfg_section),
+            errmsg,
+        )
 
 
 def mqtt_publish_fan_percon():
@@ -597,33 +597,32 @@ def setup_mqtt_filters():
 
 def setup_timers():
     """Define dictionary of timers."""
+    cfg_section = 'Timers'
     # Timer 01
     name = 'Timer_mqtt'
-    cfg_section = 'TimerMqtt'
-    c_period = float(config.option('period_reconnect', cfg_section, 15.0))
+    c_period = float(config.option('period_mqtt', cfg_section, 15.0))
     c_period = max(min(c_period, 180.0), 5.0)
-    logger.debug('Setup reconnection timer %s: period = %ss', name, c_period)
+    logger.debug('Setup timer %s: period = %ss', name, c_period)
     timer1 = modTimer.Timer(
         c_period,
         cbTimer_mqtt_reconnect,
         name=name,
         id=name,
     )
+    modTimer.register_timer(name, timer1)
     # Timer 02
     name = 'Timer_fan'
-    cfg_section = 'Fan'
-    c_period = float(config.option('period_check', cfg_section, 5.0))
+    c_period = float(config.option('period_fan', cfg_section, 5.0))
     c_period = max(min(c_period, 60.0), 1.0)
-    logger.debug('Setup checking timer %s: period = %ss', name, c_period)
+    logger.debug('Setup timer %s: period = %ss', name, c_period)
     timer2 = modTimer.Timer(
         c_period,
         cbTimer_fan,
         name=name,
         # count=9,
     )
-    # Register and start all timers
-    modTimer.register_timer(name, timer1)
     modTimer.register_timer(name, timer2)
+    # Start all timers
     modTimer.start_timers()
 
 

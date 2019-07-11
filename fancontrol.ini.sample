@@ -51,11 +51,14 @@ fan_command_percoff = %(mqtt_topic_fan_command)s/perc/off
 fan_command_tempon = %(mqtt_topic_fan_command)s/temp/on
 fan_command_tempoff = %(mqtt_topic_fan_command)s/temp/off
 
-[TimerMqtt]
+[Timers]
 ; Period in seconds for testing connection and attempting to reconnect
 ; to a MQTT broker.
 ; Hardcoded default 15.0s, hardcoded valid range 5 ~ 180s
-period_reconnect = 30.0
+period_mqtt = 30.0
+; Period in seconds for checking SoC temperature and controlling fan accordingly
+; Hardcoded default 5.0s, hardcoded valid range 1 ~ 60s
+period_fan = 5.0
 
 [Fan]
 ; Parameters of cooling fan control
@@ -73,6 +76,3 @@ percentage_on = 93
 ; Should be sufficiently lower then turning on percentage in order to achieve
 ; proper hysteresis.
 percentage_off = 66
-; Period in seconds for checking SoC temperature and controlling fan accordingly
-; Hardcoded default 5.0s, hardcoded valid range 1 ~ 60s
-period_check = 5.0
