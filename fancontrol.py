@@ -30,9 +30,9 @@ import os
 import sys
 import argparse
 import logging
-import platform
 
 # Third party modules
+import gbj_pythonlib_sw.utils as modUtils
 import gbj_pythonlib_sw.config as modConfig
 import gbj_pythonlib_sw.mqtt as modMQTT
 import gbj_pythonlib_sw.timer as modTimer
@@ -443,12 +443,20 @@ def cbMqtt_dev_fan(client, userdata, message):
 ###############################################################################
 # Setup functions
 ###############################################################################
+def setup_params():
+    """Determine script operational parameters."""
+    Script.fullname = os.path.splitext(os.path.abspath(__file__))[0]
+    Script.basename = os.path.basename(__file__)
+    Script.name = os.path.splitext(Script.basename)[0]
+    Script.service = modUtils.check_service(Script.name)
+
+
 def setup_cmdline():
     """Define command line arguments."""
-    config_file = os.path.splitext(os.path.abspath(__file__))[0] + '.ini'
-    if platform.system() == 'Linux':
+    config_file = Script.fullname + '.ini'
+    if modUtils.linux():
         log_folder = '/var/log'
-    elif platform.system() == 'Windows':
+    elif modUtils.windows():
         log_folder = 'c:/Temp'
     else:
         log_folder = '.'
@@ -503,7 +511,7 @@ def setup_logger():
     """Configure logging facility."""
     global logger
     # Set logging to file for module and script logging
-    log_file = '/'.join([cmdline.logdir, os.path.basename(__file__) + '.log'])
+    log_file = '/'.join([cmdline.logdir, Script.basename + '.log'])
     logging.basicConfig(
         level=getattr(logging, cmdline.loglevel.upper()),
         format='%(asctime)s - %(levelname)-8s - %(name)s: %(message)s',
@@ -653,6 +661,7 @@ def loop():
 
 def main():
     """Fundamental control function."""
+    setup_params()
     setup_cmdline()
     setup_logger()
     setup_config()
@@ -665,6 +674,6 @@ def main():
 
 
 if __name__ == '__main__':
-    if platform.system() == 'Linux' and os.getegid() != 0:
+    if modUtils.linux() and os.getegid() != 0:
         sys.exit('Script must be run as root')
     main()
