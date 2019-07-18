@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Cooling fan manageer and MQTT client.
+"""Cooling fan manager and MQTT client.
 
 Script provides following functionalities:
 
@@ -15,8 +15,8 @@ Script provides following functionalities:
   temperatures limits, etc.
 
 """
-__version__ = '0.2.0'
-__status__ = 'Development'
+__version__ = '0.3.0'
+__status__ = 'Beta'
 __author__ = 'Libor Gabaj'
 __copyright__ = 'Copyright 2019, ' + __author__
 __credits__ = [__author__]
@@ -36,7 +36,8 @@ import gbj_pythonlib_sw.utils as modUtils
 import gbj_pythonlib_sw.config as modConfig
 import gbj_pythonlib_sw.mqtt as modMQTT
 import gbj_pythonlib_sw.timer as modTimer
-import gbj_pythonlib_hw.orangepi as modOrangePi
+import gbj_pythonlib_hws.orangepi as modOrangePi
+# import gbj_pythonlib_hw.orangepi as modOrangePi
 import gbj_pythonlib_iot.common as iot
 import gbj_pythonlib_iot.fan as iot_fan
 
@@ -194,7 +195,7 @@ def mqtt_publish_fan_tempoff():
         return
     cfg_option = 'fan_status_tempoff'
     cfg_section = mqtt.GROUP_TOPICS
-    value = dev_fan.get_temperature_on()
+    value = dev_fan.get_temperature_off()
     try:
         mqtt.publish(str(value), cfg_option, cfg_section)
         logger.debug(
@@ -262,12 +263,17 @@ def cbTimer_fan(*arg, **kwargs):
     temp_cur = dev_fan.get_temperature()
     temp_on = dev_fan.get_temperature_on()
     temp_off = dev_fan.get_temperature_off()
+    logger.debug('Current SoC temperature %.1f°C', temp_cur)
     # Turn on fan at reaching start temperature and fan is switched off
     if temp_cur >= temp_on and pi.is_pin_off(fan_pin):
         pi.pin_on(fan_pin)
+        mqtt_publish_fan_status()
+        logger.info('Fan switched ON')
     # Turn off fan at reaching stop temperature and fan is switched on
     if temp_cur <= temp_off and pi.is_pin_on(fan_pin):
         pi.pin_off(fan_pin)
+        mqtt_publish_fan_status()
+        logger.info('Fan switched OFF')
 
 
 def cbMqtt_on_connect(client, userdata, flags, rc):
@@ -537,22 +543,15 @@ def setup_config():
 
 
 def setup_pi():
-    """Define GPIO control.
-
-    Notes
-    -----
-    - Operational pin names are stored in the object as attributes.
-    - Default fan percentage limits are stored in the object as attributes.
-
-    """
+    """Define microcomputer GPIO control."""
     global pi
     pi = modOrangePi.OrangePiOne()
 
 
 def setup_fan():
-    """Define cooling fan control."""
+    """Define cooling fan parameters."""
     global dev_fan
-    dev_fan = iot_fan.Fan(config.option('pin_fan_name', 'Fan'))
+    dev_fan = iot_fan.Fan(config.option('pin_name', 'Fan'))
     dev_fan.set_percentage_on(float(config.option(
         'percentage_on', 'Fan', None)))
     dev_fan.set_percentage_off(float(config.option(
@@ -641,9 +640,11 @@ def setup():
         print(config.get_content())
     # Running mode
     if Script.service:
-        logger.info('Script runs as the service %s.service', Script.name)
+        logger.info('Script runs as a service')
     else:
-        logger.info('Script %s runs in standalone mode', Script.name)
+        logger.info('Script runs in the standalone mode')
+    # Initially switch off the fan
+    pi.pin_off(dev_fan.get_pin())
 
 
 def loop():
