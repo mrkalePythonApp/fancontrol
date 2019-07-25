@@ -1,28 +1,16 @@
-**********
 fancontrol
 **********
 
 Script manages attached fan for cooling the system on the basis of
-the system temperature provided by the SoC [1]_. At the same time the script acts
-as an MQTT [2]_ client communicating with a MQTT broker, usually a local one
-``mosquitto`` for data exchange within IoT [3]_.
-
-- For the sake of generating the documentation with the system ``Sphinx``,
-  the repository might be handled as a package.
+the system temperature provided by the SoC [1]_. At the same time the script
+acts as an MQTT [2]_ client communicating with a MQTT broker, usually a local
+one ``mosquitto`` for data exchange within IoT [3]_.
 
 - The script is aimed for Pi microcomputers running as headless servers,
   e.g., ``Raspberry Pi``, ``Orange Pi``, ``Nano Pi``, etc.
 
-- The documentation configuration for the script is located in the folder
-  `docs/source`. The documentation can be generated from the folder `docs`
-  in HTML [4]_ format by the command ``make html`` and in PDF [5]_ format
-  by the command ``make latexpdf``.
-
-- The generated documentation of the script is published on the dedicated
-  Github page `fancontrol <https://mrkalepythonapp.github.io/fancontrol/>`_.
-
-- The script can run under ``Python2`` as well as ``Python3``. However, it is
-  defaulted to Python3 by the `shebang`.
+- The script runS under ``Python3`` as well as ``Python3`` as it is defined
+  by the `shebang`.
 
 - It is recommended to run the **script as a service** of the operating system.
 
