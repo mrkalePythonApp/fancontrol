@@ -73,7 +73,7 @@ dev_fan = None  # Object for processing cooling fan parameters
 ###############################################################################
 def action_exit():
     """Perform all activities right before exiting the script."""
-    modTimer.stop_timers()
+    modTimer.stop_all()
     mqtt_publish_lwt(iot.Status.OFFLINE)
     mqtt.disconnect()
 
@@ -605,32 +605,28 @@ def setup_mqtt_filters():
 def setup_timers():
     """Define dictionary of timers."""
     cfg_section = 'Timers'
-    # Timer 01
+    # Timer1
     name = 'Timer_mqtt'
     c_period = float(config.option('period_mqtt', cfg_section, 15.0))
     c_period = max(min(c_period, 180.0), 5.0)
     logger.debug('Setup timer %s: period = %ss', name, c_period)
-    timer1 = modTimer.Timer(
+    modTimer.Timer(
         c_period,
         cbTimer_mqtt_reconnect,
         name=name,
-        id=name,
     )
-    modTimer.register_timer(name, timer1)
-    # Timer 02
+    # Timer2
     name = 'Timer_fan'
     c_period = float(config.option('period_fan', cfg_section, 5.0))
     c_period = max(min(c_period, 60.0), 1.0)
     logger.debug('Setup timer %s: period = %ss', name, c_period)
-    timer2 = modTimer.Timer(
+    modTimer.Timer(
         c_period,
         cbTimer_fan,
         name=name,
-        # count=9,
     )
-    modTimer.register_timer(name, timer2)
     # Start all timers
-    modTimer.start_timers()
+    modTimer.start_all()
 
 
 def setup():
@@ -639,10 +635,10 @@ def setup():
     if cmdline.configuration:
         print(config.get_content())
     # Running mode
-    if Script.service:
-        logger.info('Script runs as a service')
-    else:
-        logger.info('Script runs in the standalone mode')
+    msg = \
+        f'Script runs as a ' \
+        f'{"service" if Script.service else "program"}'
+    logger.info(msg)
     # Initially switch off the fan
     pi.pin_off(dev_fan.get_pin())
 
@@ -675,6 +671,6 @@ def main():
 
 
 if __name__ == '__main__':
-    if modUtils.linux() and os.getegid() != 0:
+    if modUtils.linux() and not modUtils.root():
         sys.exit('Script must be run as root')
     main()
