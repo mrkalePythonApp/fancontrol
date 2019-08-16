@@ -114,7 +114,7 @@ def mqtt_message_log(message):
 ###############################################################################
 def mqtt_publish_lwt(status):
     """Publish script status to the MQTT LWT topic."""
-    if not mqtt.get_connected():
+    if not mqtt.connected:
         return
     cfg_option = Script.lwt
     cfg_section = mqtt.GROUP_TOPICS
@@ -137,7 +137,7 @@ def mqtt_publish_lwt(status):
 
 def mqtt_publish_fan_percon():
     """Publish fan temperature percentage ON to the MQTT status topic."""
-    if not mqtt.get_connected():
+    if not mqtt.connected:
         return
     cfg_option = 'fan_status_percon'
     cfg_section = mqtt.GROUP_TOPICS
@@ -155,7 +155,7 @@ def mqtt_publish_fan_percon():
 
 def mqtt_publish_fan_percoff():
     """Publish fan temperature percentage OFF to the MQTT status topic."""
-    if not mqtt.get_connected():
+    if not mqtt.connected:
         return
     cfg_option = 'fan_status_percoff'
     cfg_section = mqtt.GROUP_TOPICS
@@ -173,7 +173,7 @@ def mqtt_publish_fan_percoff():
 
 def mqtt_publish_fan_tempon():
     """Publish fan temperature value ON to the MQTT status topic."""
-    if not mqtt.get_connected():
+    if not mqtt.connected:
         return
     cfg_option = 'fan_status_tempon'
     cfg_section = mqtt.GROUP_TOPICS
@@ -191,7 +191,7 @@ def mqtt_publish_fan_tempon():
 
 def mqtt_publish_fan_tempoff():
     """Publish fan temperature value OFF to the MQTT status topic."""
-    if not mqtt.get_connected():
+    if not mqtt.connected:
         return
     cfg_option = 'fan_status_tempoff'
     cfg_section = mqtt.GROUP_TOPICS
@@ -209,7 +209,7 @@ def mqtt_publish_fan_tempoff():
 
 def mqtt_publish_fan_status():
     """Publish fan status to the MQTT status topic."""
-    if not mqtt.get_connected():
+    if not mqtt.connected:
         return
     cfg_option = 'mqtt_topic_fan_status'
     cfg_section = mqtt.GROUP_DEFAULT
@@ -246,7 +246,7 @@ def mqtt_publish_fan_state():
 ###############################################################################
 def cbTimer_mqtt_reconnect(*arg, **kwargs):
     """Execute MQTT reconnect."""
-    if mqtt.get_connected():
+    if mqtt.connected:
         return
     logger.warning('Reconnecting to MQTT broker')
     try:
@@ -633,7 +633,7 @@ def setup():
     """Global initialization."""
     # Print configuration file to the console
     if cmdline.configuration:
-        print(config.get_content())
+        print(config.content)
     # Running mode
     msg = \
         f'Script runs as a ' \
