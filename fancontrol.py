@@ -109,6 +109,45 @@ def mqtt_message_log(message):
     return message.payload is not None
 
 
+def fan_init():
+    """Set all fan parameters to initial values."""
+    dev_fan.reset()
+    try:
+        dev_fan.percentage_on = float(config.option(
+            'percentage_on', 'Fan', None))
+    except ValueError:
+        pass
+    try:
+        dev_fan.percentage_off = float(config.option(
+            'percentage_off', 'Fan', None))
+    except ValueError:
+        pass
+    # Rounding
+    round_def = 1
+    round_min = 0
+    round_max = 6
+    try:
+        dev_fan.round_perc = int(config.option('round_perc', 'Fan', round_def))
+    except ValueError:
+        dev_fan.round_perc = round_def
+    dev_fan.round_perc = max(min(dev_fan.round_perc, round_max), round_min)
+    try:
+        dev_fan.round_temp = int(config.option('round_temp', 'Fan', round_def))
+    except ValueError:
+        dev_fan.round_temp = round_def
+    dev_fan.round_temp = max(min(dev_fan.round_temp, round_max), round_min)
+
+
+def round_temp(value):
+    """Round temperature for publishing."""
+    return round(value, dev_fan.round_temp)
+
+
+def round_perc(value):
+    """Round percentage for publishing."""
+    return round(value, dev_fan.round_perc)
+
+
 ###############################################################################
 # MQTT actions
 ###############################################################################
@@ -141,7 +180,7 @@ def mqtt_publish_fan_percon():
         return
     cfg_option = 'fan_status_percon'
     cfg_section = mqtt.GROUP_TOPICS
-    value = dev_fan.percentage_on
+    value = round_perc(dev_fan.percentage_on)
     try:
         mqtt.publish(str(value), cfg_option, cfg_section)
         logger.debug(
@@ -159,7 +198,7 @@ def mqtt_publish_fan_percoff():
         return
     cfg_option = 'fan_status_percoff'
     cfg_section = mqtt.GROUP_TOPICS
-    value = dev_fan.percentage_off
+    value = round_perc(dev_fan.percentage_off)
     try:
         mqtt.publish(str(value), cfg_option, cfg_section)
         logger.debug(
@@ -177,7 +216,7 @@ def mqtt_publish_fan_tempon():
         return
     cfg_option = 'fan_status_tempon'
     cfg_section = mqtt.GROUP_TOPICS
-    value = dev_fan.temperature_on
+    value = round_temp(dev_fan.temperature_on)
     try:
         mqtt.publish(str(value), cfg_option, cfg_section)
         logger.debug(
@@ -195,7 +234,7 @@ def mqtt_publish_fan_tempoff():
         return
     cfg_option = 'fan_status_tempoff'
     cfg_section = mqtt.GROUP_TOPICS
-    value = dev_fan.temperature_off
+    value = round_temp(dev_fan.temperature_off)
     try:
         mqtt.publish(str(value), cfg_option, cfg_section)
         logger.debug(
@@ -263,7 +302,10 @@ def cbTimer_fan(*arg, **kwargs):
     temp_cur = dev_fan.temperature
     temp_on = dev_fan.temperature_on
     temp_off = dev_fan.temperature_off
-    logger.debug('Current SoC temperature %.1f°C', temp_cur)
+    msg = \
+        f'Current SoC temperature ' \
+        f'{round_temp(temp_cur)}°C'
+    logger.debug(msg)
     # Turn on fan at reaching start temperature and fan is switched off
     if temp_cur >= temp_on and pi.is_pin_off(fan_pin):
         pi.pin_on(fan_pin)
@@ -415,27 +457,31 @@ def cbMqtt_dev_fan(client, userdata, message):
         elif command == iot.Command.STATUS:
             mqtt_publish_fan_state()
         elif command == iot.Command.RESET:
-            dev_fan.reset()
+            fan_init()
             mqtt_publish_fan_state()
     elif message.topic == mqtt.topic_name('fan_command_percon'):
         if value is not None:
             dev_fan.percentage_on = value
             mqtt_publish_fan_percon()
+            mqtt_publish_fan_tempon()
             logger.info('Updated fan percentage ON=%s%%', value)
     elif message.topic == mqtt.topic_name('fan_command_percoff'):
         if value is not None:
             dev_fan.percentage_off = value
             mqtt_publish_fan_percoff()
+            mqtt_publish_fan_tempoff()
             logger.info('Updated fan percentage OFF=%s%%', value)
     elif message.topic == mqtt.topic_name('fan_command_tempon'):
         if value is not None:
             dev_fan.temperature_on = value
             mqtt_publish_fan_tempon()
+            mqtt_publish_fan_percon()
             logger.info('Updated fan temperature ON=%s°C', value)
     elif message.topic == mqtt.topic_name('fan_command_tempoff'):
         if value is not None:
             dev_fan.temperature_off = value
             mqtt_publish_fan_tempoff()
+            mqtt_publish_fan_percoff()
             logger.info('Updated fan temperature OFF=%s°C', value)
     # Unexpected command
     else:
@@ -552,10 +598,7 @@ def setup_fan():
     """Define cooling fan parameters."""
     global dev_fan
     dev_fan = iot_fan.Fan(config.option('pin_name', 'Fan'))
-    dev_fan.percentage_on = float(config.option(
-        'percentage_on', 'Fan', None))
-    dev_fan.percentage_off = float(config.option(
-        'percentage_off', 'Fan', None))
+    fan_init()
 
 
 def setup_mqtt():

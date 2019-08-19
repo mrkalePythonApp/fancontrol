@@ -61,7 +61,6 @@ period_mqtt = 30.0
 period_fan = 5.0
 
 [Fan]
-; Parameters of cooling fan control
 ; Control pin pyA20 port or connector name
 pin_name = PA13
 ; LED pyA20 port or connector name signaling running fan
@@ -76,3 +75,9 @@ percentage_on = 93
 ; Should be sufficiently lower then turning on percentage in order to achieve
 ; proper hysteresis.
 percentage_off = 66
+; Percentage rounding to provided integer of decimals.
+; Hardcoded default 1, valid range 0 ~ 6 limited in code
+round_perc = 1
+; Temperature rounding to provided integer of decimals.
+; Hardcoded default 1, valid range 0 ~ 6 limited in code
+round_temp = 1
