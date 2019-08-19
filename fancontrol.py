@@ -15,7 +15,7 @@ Script provides following functionalities:
   temperatures limits, etc.
 
 """
-__version__ = '0.4.0'
+__version__ = '0.5.0'
 __status__ = 'Beta'
 __author__ = 'Libor Gabaj'
 __copyright__ = 'Copyright 2019, ' + __author__
